@@ -305,6 +305,21 @@ impl<N: NetworkPrimitives> NetworkManager<N> {
         let discv4 = discovery.discv4();
         let discv5 = discovery.discv5();
 
+        let static_nat = nat.clone().and_then(|nat| nat.as_external_ip(listener_addr.port()));
+        let resolved_nat = Arc::new(Mutex::new(static_nat));
+
+        // Discv4 owns its NAT refresh loop. Discv5-only networks need an equivalent runtime path
+        // because dynamic resolvers (`any`, `upnp`, `publicip`, and `netif`) cannot be queried by
+        // `NatResolver::as_external_ip`.
+        let discv5_nat = if discv4.is_none() && discv5.is_some() && static_nat.is_none() {
+            nat.clone().filter(|nat| !matches!(nat, reth_discv4::NatResolver::None))
+        } else {
+            None
+        };
+        let discv5_for_nat = discv5.clone();
+        let resolved_nat_for_task = Arc::clone(&resolved_nat);
+        let nat_executor = executor.clone();
+
         let num_active_peers = Arc::new(AtomicUsize::new(0));
 
         let sessions = SessionManager::new(
@@ -346,8 +361,26 @@ impl<N: NetworkPrimitives> NetworkManager<N> {
             discv4,
             discv5,
             event_sender.clone(),
+            Arc::clone(&resolved_nat),
             nat,
         );
+
+        if let (Some(resolver), Some(discv5)) = (discv5_nat, discv5_for_nat) {
+            nat_executor.spawn_task(async move {
+                let mut interval = tokio::time::interval(Duration::from_secs(5 * 60));
+                loop {
+                    interval.tick().await;
+                    if let Some(ip) = resolver.clone().external_addr().await {
+                        let changed = *resolved_nat_for_task.lock() != Some(ip);
+                        if changed {
+                            discv5.set_external_ip(ip);
+                            *resolved_nat_for_task.lock() = Some(ip);
+                            debug!(target: "net", %ip, "Updated discv5 external IP");
+                        }
+                    }
+                }
+            });
+        }
 
         // Spawn required block peer filter if configured
         if !required_block_hashes.is_empty() {

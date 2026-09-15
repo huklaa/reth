@@ -65,6 +65,7 @@ impl<N: NetworkPrimitives> NetworkHandle<N> {
         discv4: Option<Discv4>,
         discv5: Option<Discv5>,
         event_sender: EventSender<NetworkEvent<PeerRequest<N>>>,
+        resolved_nat: Arc<Mutex<Option<std::net::IpAddr>>>,
         nat: Option<NatResolver>,
     ) -> Self {
         let inner = NetworkInner {
@@ -83,6 +84,7 @@ impl<N: NetworkPrimitives> NetworkHandle<N> {
             discv4,
             discv5,
             event_sender,
+            resolved_nat,
             nat,
         };
         Self { inner: Arc::new(inner) }
@@ -256,10 +258,8 @@ impl<N: NetworkPrimitives> PeersInfo for NetworkHandle<N> {
             // record here
             discv4.node_record()
         } else if let Some(discv5) = self.inner.discv5.as_ref() {
-            // for disv5 we must check if we have an external ip configured
-            if let Some(external) =
-                self.inner.nat.clone().and_then(|nat| nat.as_external_ip(discv5.local_port()))
-            {
+            // For discv5 we must check if NAT resolution produced an external IP.
+            if let Some(external) = *self.inner.resolved_nat.lock() {
                 NodeRecord::new((external, discv5.local_port()).into(), *self.peer_id())
             } else {
                 // use the node record that discv5 tracks or use localhost
@@ -543,6 +543,8 @@ struct NetworkInner<N: NetworkPrimitives = EthNetworkPrimitives> {
     event_sender: EventSender<NetworkEvent<PeerRequest<N>>>,
     /// The NAT resolver
     nat: Option<NatResolver>,
+    /// The external IP resolved at runtime for discv5-only networks.
+    resolved_nat: Arc<Mutex<Option<std::net::IpAddr>>>,
 }
 
 /// Provides access to modify the network's additional protocol handlers.

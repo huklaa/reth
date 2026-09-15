@@ -164,6 +164,18 @@ impl Discv5 {
         self.discv5.local_enr()
     }
 
+    /// Updates the external IP advertised by the local ENR.
+    pub fn set_external_ip(&self, ip: IpAddr) {
+        let result = match ip {
+            IpAddr::V4(ip) => self.discv5.enr_insert("ip", &ip.octets().as_ref()),
+            IpAddr::V6(ip) => self.discv5.enr_insert("ip6", &ip.octets().as_ref()),
+        };
+
+        if let Err(err) = result {
+            error!(target: "net::discv5", %err, %ip, "Failed to update external IP in local ENR");
+        }
+    }
+
     /// The port the discv5 service is listening on.
     pub const fn local_port(&self) -> u16 {
         self.local_node_record.udp_port
@@ -749,6 +761,19 @@ mod test {
                 PeerId::random(),
             ),
         }
+    }
+
+    #[test]
+    fn set_external_ip_updates_local_enr() {
+        let discv5 = discv5_noop();
+
+        let ipv4 = Ipv4Addr::new(203, 0, 113, 1);
+        discv5.set_external_ip(ipv4.into());
+        assert_eq!(discv5.local_enr().ip4(), Some(ipv4));
+
+        let ipv6 = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1);
+        discv5.set_external_ip(ipv6.into());
+        assert_eq!(discv5.local_enr().ip6(), Some(ipv6));
     }
 
     async fn start_discovery_node(udp_port_discv5: u16) -> (Discv5, mpsc::Receiver<discv5::Event>) {
