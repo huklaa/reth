@@ -151,6 +151,14 @@ pub trait EthCall: EstimateCall + Call + LoadPendingBlock + LoadBlock + FullEthA
                     // Always disable EIP-3607
                     evm_env.cfg_env.disable_eip3607 = true;
 
+                    // Keep the effective cap for explicitly provided gas limits when
+                    // validation is enabled. Pre-Amsterdam simulations lift the EVM cap so calls
+                    // without a gas field can use the remaining block gas, but explicit limits
+                    // still need to obey the fork's transaction cap.
+                    let explicit_tx_gas_limit_cap = (validation
+                        && !evm_env.cfg_env.is_amsterdam_eip8037_enabled())
+                    .then(|| evm_env.cfg_env.tx_gas_limit_cap());
+
                     // EIP-7825's transaction gas cap is only active with Amsterdam's
                     // regular/state-gas accounting.
                     if !evm_env.cfg_env.is_amsterdam_eip8037_enabled() {
@@ -243,6 +251,7 @@ pub trait EthCall: EstimateCall + Call + LoadPendingBlock + LoadBlock + FullEthA
                             builder,
                             &state_provider,
                             calls,
+                            explicit_tx_gas_limit_cap,
                             &mut remaining_call_gas_limit,
                             chain_id,
                             this.compute_state_root_for_eth_simulate(),
@@ -265,6 +274,7 @@ pub trait EthCall: EstimateCall + Call + LoadPendingBlock + LoadBlock + FullEthA
                             builder,
                             &state_provider,
                             calls,
+                            explicit_tx_gas_limit_cap,
                             &mut remaining_call_gas_limit,
                             chain_id,
                             this.compute_state_root_for_eth_simulate(),

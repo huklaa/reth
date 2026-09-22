@@ -314,6 +314,7 @@ pub fn execute_transactions<S, T>(
     mut builder: S,
     state_provider: impl StateProvider,
     calls: Vec<RpcTxReq<T::Network>>,
+    explicit_tx_gas_limit_cap: Option<u64>,
     remaining_call_gas_limit: &mut Option<u64>,
     chain_id: u64,
     compute_state_root: bool,
@@ -349,15 +350,19 @@ where
         let mut default_gas_limit = block_gas_remaining;
 
         if let Some(gas_limit) = call.as_ref().gas_limit() {
-            let exceeds_gas_limit = if is_amsterdam {
-                let regular_available_gas = block_gas_limit.saturating_sub(block_regular_gas_used);
-                let state_available_gas = block_gas_limit.saturating_sub(block_state_gas_used);
-                let regular_tx_gas_limit = gas_limit.min(tx_gas_limit_cap);
+            let exceeds_gas_limit = explicit_tx_gas_limit_cap
+                .is_some_and(|tx_gas_limit_cap| gas_limit > tx_gas_limit_cap)
+                || if is_amsterdam {
+                    let regular_available_gas =
+                        block_gas_limit.saturating_sub(block_regular_gas_used);
+                    let state_available_gas =
+                        block_gas_limit.saturating_sub(block_state_gas_used);
+                    let regular_tx_gas_limit = gas_limit.min(tx_gas_limit_cap);
 
-                regular_tx_gas_limit > regular_available_gas || gas_limit > state_available_gas
-            } else {
-                gas_limit > block_gas_remaining
-            };
+                    regular_tx_gas_limit > regular_available_gas || gas_limit > state_available_gas
+                } else {
+                    gas_limit > block_gas_remaining
+                };
 
             if exceeds_gas_limit {
                 return Err(EthApiError::other(EthSimulateError::BlockGasLimitExceeded))

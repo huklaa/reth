@@ -10,6 +10,7 @@ use alloy_rpc_types_eth::{
 use reth_chainspec::{ChainSpec, ChainSpecBuilder, MAINNET};
 use reth_e2e_test_utils::setup_engine;
 use reth_node_ethereum::EthereumNode;
+use revm::primitives::eip7825::TX_GAS_LIMIT_CAP;
 use std::sync::Arc;
 
 #[tokio::test]
@@ -296,6 +297,62 @@ async fn test_simulate_v1_validation_omitted_gas_uses_remaining_gas_osaka() -> e
             .build(),
     );
     assert_validation_uses_remaining_gas(chain_spec, eth_payload_attributes).await
+}
+
+#[tokio::test]
+async fn test_simulate_v1_validation_rejects_explicit_gas_over_cap_osaka() -> eyre::Result<()> {
+    reth_tracing::init_test_tracing();
+
+    let chain_spec = Arc::new(
+        ChainSpecBuilder::default()
+            .chain(MAINNET.chain)
+            .genesis(serde_json::from_str(include_str!("../assets/genesis.json")).unwrap())
+            .osaka_activated()
+            .build(),
+    );
+    let (mut nodes, wallet) = setup_engine::<EthereumNode>(
+        1,
+        chain_spec,
+        false,
+        Default::default(),
+        eth_payload_attributes,
+    )
+    .await?;
+    let node = nodes.pop().unwrap();
+    let provider = ProviderBuilder::new()
+        .wallet(EthereumWallet::new(wallet.wallet_gen().swap_remove(0)))
+        .connect_http(node.rpc_url());
+
+    let from = Address::with_last_byte(0x41);
+    let state_overrides =
+        StateOverridesBuilder::default().with_balance(from, U256::from(u64::MAX)).build();
+    let tx = TransactionRequest::default()
+        .from(from)
+        .to(Address::ZERO)
+        .gas_limit(TX_GAS_LIMIT_CAP + 1)
+        .max_fee_per_gas(0)
+        .max_priority_fee_per_gas(0)
+        .nonce(0);
+    let sim_block = SimBlock::default()
+        .with_block_overrides(BlockOverrides {
+            gas_limit: Some(30_000_000),
+            base_fee: Some(U256::ZERO),
+            ..Default::default()
+        })
+        .with_state_overrides(state_overrides)
+        .call(tx);
+    let payload = SimulatePayload::default().with_validation().extend(sim_block);
+
+    let err = provider
+        .raw_request::<_, Vec<SimulatedBlock>>("eth_simulateV1".into(), (&payload, "latest"))
+        .await
+        .unwrap_err();
+    let err = err.as_error_resp().expect("expected JSON-RPC error response");
+
+    assert_eq!(err.code, -38015);
+    assert_eq!(err.message, "Block gas limit exceeded by the block's transactions");
+
+    Ok(())
 }
 
 #[tokio::test]
